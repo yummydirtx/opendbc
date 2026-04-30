@@ -1,3 +1,5 @@
+import numpy as np
+
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits
@@ -25,6 +27,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
   def __init__(self, dbc_names, CP, CP_SP):
     CarControllerBase.__init__(self, dbc_names, CP, CP_SP)
     IntelligentCruiseButtonManagementInterface.__init__(self, CP, CP_SP)
+    self.params = CarControllerParams(CP)
     self.apply_torque_last = 0
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.brake_counter = 0
@@ -43,11 +46,18 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
     apply_torque = 0
 
+    # Speed-dependent STEER_MAX (CX-5 2022: 1200 below 32 mph, 800 above)
+    if hasattr(self.params, 'STEER_MAX_LOOKUP'):
+      steer_max = round(float(np.interp(CS.out.vEgoRaw, self.params.STEER_MAX_LOOKUP[0],
+                                         self.params.STEER_MAX_LOOKUP[1])))
+    else:
+      steer_max = self.params.STEER_MAX
+
     if CC.latActive:
       # calculate steer and also set limits due to driver torque
-      new_torque = int(round(CC.actuators.torque * CarControllerParams.STEER_MAX))
+      new_torque = int(round(CC.actuators.torque * steer_max))
       apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last,
-                                                      CS.out.steeringTorque, CarControllerParams)
+                                                      CS.out.steeringTorque, self.params, steer_max)
 
     virtual_resume_sent = False
     if not self.CP.openpilotLongitudinalControl:
@@ -222,7 +232,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer, self.frame, self.last_button_frame))
 
     new_actuators = CC.actuators.as_builder()
-    new_actuators.torque = apply_torque / CarControllerParams.STEER_MAX
+    new_actuators.torque = apply_torque / steer_max
     new_actuators.torqueOutputCan = apply_torque
 
     self.frame += 1

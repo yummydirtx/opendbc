@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-from opendbc.car import get_safety_config, structs
+from opendbc.car import Bus, get_safety_config, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarInterfaceBase
 from opendbc.car.mazda.carcontroller import CarController
 from opendbc.car.mazda.carstate import CarState
 from opendbc.car.mazda.longitudinal import enter_radar_programming_session
-from opendbc.car.mazda.values import CAR, LKAS_LIMITS
+from opendbc.car.mazda.radar_interface import RadarInterface
+from opendbc.car.mazda.values import CAR, DBC, LKAS_LIMITS
 
 MAZDA_LONG_SAFETY_PARAM = 1
 
@@ -13,6 +14,7 @@ MAZDA_LONG_SAFETY_PARAM = 1
 class CarInterface(CarInterfaceBase):
   CarState = CarState
   CarController = CarController
+  RadarInterface = RadarInterface
 
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
@@ -25,11 +27,18 @@ class CarInterface(CarInterfaceBase):
     ret.pcmCruise = True
     ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.mazda,
                                            MAZDA_LONG_SAFETY_PARAM if ret.openpilotLongitudinalControl else None)]
-    ret.radarUnavailable = True
+    if ret.openpilotLongitudinalControl:
+      ret.radarUnavailable = True
+    else:
+      ret.radarUnavailable = Bus.radar not in DBC[candidate]
 
     ret.dashcamOnly = candidate not in (CAR.MAZDA_CX5_2022, CAR.MAZDA_CX9_2021)
 
+    ret.enableBsm = 0x477 in fingerprint[0]
+
     ret.steerActuatorDelay = 0.1
+    if candidate in (CAR.MAZDA_CX5_2022,):
+      ret.steerActuatorDelay = 0.14  # lagd learns 0.338 total (initial = this + 0.2)
     ret.steerLimitTimer = 0.8
 
     CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
