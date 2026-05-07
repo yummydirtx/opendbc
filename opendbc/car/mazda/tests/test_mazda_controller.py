@@ -4,7 +4,8 @@
 import numpy as np
 import pytest
 
-from opendbc.car.mazda.longitudinal import CAM_BUS, RADAR_BUS, build_crz_ctrl, build_crz_info, create_longitudinal_messages, create_radar_heartbeat_messages
+from opendbc.car.mazda.longitudinal import CAM_BUS, RADAR_BUS, build_crz_ctrl, build_crz_info, create_longitudinal_messages, \
+                                          create_radar_heartbeat_messages, resume_unlatch_accel
 from opendbc.car.mazda.values import CAR, CarControllerParams
 
 
@@ -76,6 +77,15 @@ class TestMazdaLongitudinalMessages:
 
   def test_inactive_crz_ctrl_matches_stock_radar_standby(self):
     assert build_crz_ctrl(False, False, False, False).hex() == "0201010000000000"
+
+  def test_resume_crz_ctrl_reactivation_matches_stock_latched_profile(self):
+    assert build_crz_ctrl(True, True, False, False, crz_hold_latched=True).hex() == "0a018b8000001000"
+    assert build_crz_ctrl(True, True, False, False, crz_resume_active=True).hex() == "0a018b6000001000"
+
+  def test_resume_unlatch_accel_ramps_to_stock_low_speed_command(self):
+    assert resume_unlatch_accel(0.0) == 0.0
+    assert resume_unlatch_accel(1.0) == 0.4
+    assert resume_unlatch_accel(2.0) == 0.4
 
   def test_inactive_available_crz_info_allows_acc_set(self):
     expected = [

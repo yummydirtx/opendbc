@@ -43,6 +43,7 @@ HOLD_BRAKE_CMD_TARGET = -1024.0
 HOLD_LATCHED_CMD_TARGET = -1.0
 NEAR_STOP_BRAKE_CMD_TARGET = -750.0
 NEAR_STOP_ENTRY_SPEED = 1.0
+RESUME_UNLATCH_CMD_TARGET = 400.0
 ACTIVE_STOP_CHECKSUM_BIAS = 0x04
 
 # Stock Mazda longitudinal is not using one global raw-command scale across all
@@ -132,6 +133,12 @@ def hold_latched_accel() -> float:
   # Once the chassis hold latch takes over, stock CRZ_INFO.ACCEL_CMD relaxes
   # back near zero and the stop bits clear.
   return HOLD_LATCHED_CMD_TARGET / ACCEL_SCALE_DOWN_V[0]
+
+
+def resume_unlatch_accel(progress: float) -> float:
+  # Stock ramps CRZ_INFO.ACCEL_CMD upward while RES is unlatching the
+  # standstill hold, before the vehicle actually starts rolling.
+  return (RESUME_UNLATCH_CMD_TARGET * clip(progress, 0.0, 1.0)) / ACCEL_SCALE_UP_V[0]
 
 
 def near_stop_brake_accel(v_ego: float) -> float:

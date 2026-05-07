@@ -6,7 +6,7 @@ from opendbc.car.lateral import apply_driver_steer_torque_limits
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.mazda.longitudinal import CAM_BUS, LONG_COMMAND_STEP, NEAR_STOP_ENTRY_SPEED, RADAR_BUS, RADAR_HEARTBEAT_STEP, TESTER_PRESENT_STEP, \
                                            create_longitudinal_messages, create_radar_heartbeat_messages, create_radar_tester_present, \
-                                           hold_brake_accel, hold_latched_accel, near_stop_brake_accel
+                                           hold_brake_accel, hold_latched_accel, near_stop_brake_accel, resume_unlatch_accel
 from opendbc.car.mazda import mazdacan
 from opendbc.car.mazda.values import CarControllerParams, Buttons
 
@@ -164,33 +164,49 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       standstill_hold_request = stop_go_request and CS.out.standstill
       hold_latched = standstill_hold_request and self.standstill_hold_frames > HOLD_REQUEST_FRAMES
       brake_release_requested = release_hold_requested or effective_resume_requested
+      release_brake = self.resume_release_frames > 0
 
-      crz_hold_latched = standstill_hold_request and self.standstill_hold_frames >= CRZ_CTRL_LATCH_FRAMES and \
-                         (not effective_resume_requested or self.resume_crz_latched_frames > 0)
+      crz_resume_latched_reactivate = release_brake and CS.out.standstill and self.resume_crz_latched_frames > 0
+      crz_hold_latched = (
+        crz_resume_latched_reactivate or
+        (standstill_hold_request and self.standstill_hold_frames >= CRZ_CTRL_LATCH_FRAMES and
+         (not effective_resume_requested or self.resume_crz_latched_frames > 0))
+      )
       # Stock resumes from passive hold by re-enabling ACC while the RES press
       # is active, instead of staying indefinitely in the passive-hold substate.
       crz_hold_passive = standstill_hold_request and self.standstill_hold_frames >= CRZ_CTRL_PASSIVE_FRAMES and not effective_resume_requested
-      release_brake = self.resume_release_frames > 0
-      crz_ctrl_resume_active = release_brake and CS.out.vEgo < self.CP.vEgoStarting and not crz_hold_latched and not crz_hold_passive
-      if crz_ctrl_resume_active:
+      crz_info_resume_active = release_brake and CS.out.vEgo < self.CP.vEgoStarting and not crz_hold_passive
+      crz_ctrl_resume_active = crz_info_resume_active and not crz_resume_latched_reactivate
+      if crz_info_resume_active:
         if not self.resume_ctrl_active_prev:
           self.resume_phase_frames = CRZ_INFO_RESUME_PHASE_FRAMES
         elif self.resume_phase_frames > 0:
           self.resume_phase_frames -= 1
       else:
         self.resume_phase_frames = 0
-      crz_info_resume_unlatching = crz_ctrl_resume_active and self.resume_phase_frames > 0
-      self.resume_ctrl_active_prev = crz_ctrl_resume_active
+      crz_info_resume_unlatching = (
+        crz_info_resume_active and self.resume_phase_frames > 0 and
+        (crz_ctrl_resume_active or self.resume_crz_latched_frames <= LONG_COMMAND_STEP)
+      )
+      self.resume_ctrl_active_prev = crz_info_resume_active
       # Keep CRZ_INFO stop bits cleared through the whole synthetic brake-release
       # window. Otherwise Mazda sees positive accel while we still advertise an
       # active stop, which shows up in the logs as a failed restart handoff.
       crz_info_hold_request = stop_go_request and not (brake_release_requested or release_brake)
+      crz_ctrl_hold_request = stop_go_request or crz_resume_latched_reactivate
 
       accel = 0.0
       if CC.longActive:
         accel = CC.actuators.accel
         if release_brake:
-          accel = max(accel, 0.0)
+          if crz_resume_latched_reactivate:
+            accel = hold_latched_accel()
+          else:
+            accel = max(accel, 0.0)
+          if crz_ctrl_resume_active and self.resume_phase_frames > 0:
+            resume_phase_elapsed = CRZ_INFO_RESUME_PHASE_FRAMES - self.resume_phase_frames
+            resume_phase_progress = resume_phase_elapsed / max(CRZ_INFO_RESUME_PHASE_FRAMES - 1, 1)
+            accel = max(accel, resume_unlatch_accel(resume_phase_progress))
         elif CS.out.standstill:
           accel = hold_latched_accel() if hold_latched else hold_brake_accel()
         elif self.stop_intent_latched and not release_hold_requested and (stopping or CS.out.vEgo < NEAR_STOP_ENTRY_SPEED):
@@ -211,7 +227,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           can_sends.extend(create_longitudinal_messages(bus, accel, self.long_counter,
                                                         long_active, lead_visible,
                                                         hold_request=crz_info_hold_request,
-                                                        crz_ctrl_hold_request=stop_go_request,
+                                                        crz_ctrl_hold_request=crz_ctrl_hold_request,
                                                         hold_latched=hold_latched,
                                                         crz_hold_latched=crz_hold_latched,
                                                         crz_hold_passive=crz_hold_passive,
